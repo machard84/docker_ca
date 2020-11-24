@@ -1,0 +1,55 @@
+---
+version: '3.6'
+
+networks:
+  automation:
+    driver: overlay
+    ipam:
+      driver: default
+
+services:
+  api:
+    build:
+      context: Flask
+    image: 127.0.0.1:5000/api:latest
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    networks:
+      automation:
+        aliases:
+          - api
+    ports:
+      - 5000:5000
+    hostname: api
+    environment:
+      - LANG=en_GB.utf-8
+      - LC_ALL=en_GB.utf-8
+      - country=UK
+      - state=Bristol
+      - locality=Bristol
+      - org=chardma.org.uk
+      - unit=DevOps
+      - email=admin@chardma.org.uk
+      - mongodb=mongodb
+
+  mongodb:
+    build:
+      context: Mongodb
+    image: 127.0.0.1:5000/mongodb:latest
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    networks:
+      automation:
+        aliases:
+          - mongodb
+    hostname: mongodb

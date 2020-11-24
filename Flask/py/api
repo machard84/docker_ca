@@ -1,0 +1,131 @@
+#!/bin/env python3
+
+from flask import Flask, jsonify, request
+from flask_restful import Api, reqparse
+from OpenSSL import crypto
+from pymongo import MongoClient
+import json
+import os
+import secrets
+
+app = Flask(__name__)
+api = Api(app)
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
+client = MongoClient(os.environ['mongodb'])
+db = client.ca
+
+
+def json_convert(data):
+    response = json.dumps(data, default=str)
+    return response
+
+
+def argparse():
+    parser = reqparse.RequestParser()
+    parser.add_argument('Hostname',
+                        type=str,
+                        required=True,
+                        help='hostname for certificate creation')
+    parser.add_argument('SAN',
+                        type=str,
+                        help='san for use in certificate creation')
+    parser.add_argument('API_KEY',
+                        type=str,
+                        required=True,
+                        help='api key to validate endpoint connection')
+    args = parser.parse_args()
+    return args
+
+
+def get_key():
+    data = db.ca.find({}, {"_id": 0, "api_key": 1})
+    for content in data:
+        if "api_key" in content:
+            return content
+
+
+def gen_key():
+    k = crypto.PKey()
+    k.generate_key(crypto.TYPE_RSA, 4096)
+    print(k)
+    return k
+
+
+def gen_cert(args, k):
+    serial = 0
+    validity = 10*365*24*60*60
+    cert = crypto.X509()
+    cert.get_subject().C = os.environ['country']
+    cert.get_subject().ST = os.environ['state']
+    cert.get_subject().L = os.environ['locality']
+    cert.get_subject().O = os.environ['org']
+    cert.get_subject().OU = os.environ['unit']
+    cert.get_subject().CN = args.Hostname
+    cert.get_subject().SN = args.SAN
+    cert.get_subject().emailAddress = os.environ['email']
+    cert.set_serial_number(serial)
+    cert.gmtime_adj_notBefore(0)
+    cert.gmtime_adj_notAfter(validity)
+    cert.set_issuer(cert.get_subject())
+    cert.set_pubkey(k)
+    cert.sign(k, 'sha512')
+    ssl_cert = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode("utf-8")
+    print(ssl_cert)
+    return ssl_cert
+
+
+@app.route('/key', methods=['GET', 'POST', 'DELETE'])
+def key():
+    if request.method == 'GET':
+        data = get_key()
+        return jsonify(data)
+
+    elif request.method == 'POST':
+        curr_key = get_key()
+        new_key = secrets.token_urlsafe(32)
+
+        if curr_key is None:
+            db.ca.insert_one({'api_key': new_key})
+            return jsonify(new_key)
+
+        else:
+            return 'Please delete the current key before creating a new one.\n'
+
+    elif request.method == 'DELETE':
+        api_key = get_key()
+        db.ca.delete_one(api_key)
+        return jsonify(api_key)
+
+
+@app.route('/certs', methods=['GET', 'POST', 'DELETE'])
+def certs():
+    args = argparse()
+    if request.method == 'GET':
+        data = db.ca.find_one({'Hostname': args.Hostname})
+        return json.dumps(data, default=str)
+
+    elif request.method == 'POST':
+
+        k = gen_key()
+        cert = gen_cert(args, k)
+        json_key = json.dumps(k, default=str)
+        json_cert = json.dumps(cert, default=str)
+        head = {
+            'Hostname': args.Hostname,
+            'SAN': args.SAN,
+            'CERT': json_cert,
+            'KEY': json_key,
+        }
+        db.ca.insert_one(head)
+        return 'success'
+
+    elif request.method == 'DELETE':
+        data = db.ca.delete_one({'Hostname': args.Hostname})
+        if data:
+            return 'success'
+        else:
+            return 'failed'
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host='0.0.0.0')
