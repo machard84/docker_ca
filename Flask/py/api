@@ -45,13 +45,12 @@ def get_key():
 
 
 def gen_key():
-    k = crypto.PKey()
-    k.generate_key(crypto.TYPE_RSA, 4096)
-    print(k)
-    return k
+    key = crypto.PKey()
+    key.generate_key(crypto.TYPE_RSA, 4096)
+    return key
 
 
-def gen_cert(args, k):
+def gen_cert(args, key):
     serial = 0
     validity = 10*365*24*60*60
     cert = crypto.X509()
@@ -67,11 +66,9 @@ def gen_cert(args, k):
     cert.gmtime_adj_notBefore(0)
     cert.gmtime_adj_notAfter(validity)
     cert.set_issuer(cert.get_subject())
-    cert.set_pubkey(k)
-    cert.sign(k, 'sha512')
-    ssl_cert = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode("utf-8")
-    print(ssl_cert)
-    return ssl_cert
+    cert.set_pubkey(key)
+    cert.sign(key, 'sha512')
+    return cert
 
 
 @app.route('/key', methods=['GET', 'POST', 'DELETE'])
@@ -105,19 +102,23 @@ def certs():
         return json.dumps(data, default=str)
 
     elif request.method == 'POST':
-
-        k = gen_key()
-        cert = gen_cert(args, k)
-        json_key = json.dumps(k, default=str)
-        json_cert = json.dumps(cert, default=str)
+        key = gen_key()
+        cert = gen_cert(args, key)
+        json_cert = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode("utf-8")
+        json_key = crypto.dump_privatekey(crypto.FILETYPE_PEM, key).decode("utf-8")
         head = {
             'Hostname': args.Hostname,
-            'SAN': args.SAN,
-            'CERT': json_cert,
-            'KEY': json_key,
+            'Requester IP': request.remote_addr,
+            'SSL': {
+                'CERT': json_cert.splitlines(),
+                'KEY': json_key.splitlines(),
+            }
         }
-        db.ca.insert_one(head)
-        return 'success'
+        data = db.ca.insert_one(head)
+        if data:
+            return 'success'
+        else:
+            return 'failed'
 
     elif request.method == 'DELETE':
         data = db.ca.delete_one({'Hostname': args.Hostname})
